@@ -4,6 +4,7 @@ import java.awt.event.KeyEvent;
 
 import engine.Cooldown;
 import engine.Core;
+import engine.SoundManager;
 
 /**
  * Implements the title screen.
@@ -43,6 +44,9 @@ public class TitleScreen extends Screen {
 		this.returnCode = 1; // 2P mode: changed to default selection as 1P
 		this.selectionCooldown = Core.getCooldown(SELECTION_TIME);
 		this.selectionCooldown.reset();
+
+        // Start menu music loop when the title screen is created
+        SoundManager.playLoop("sound/menu_sound.wav");
 	}
 
 	/**
@@ -52,6 +56,8 @@ public class TitleScreen extends Screen {
 	 */
 	public final int run() {
 		super.run();
+        // Stop menu music when leaving the title screen
+        SoundManager.stop();
 		return this.returnCode;
 	}
 
@@ -64,16 +70,19 @@ public class TitleScreen extends Screen {
         draw();
         if (this.selectionCooldown.checkFinished() && this.inputDelay.checkFinished()) {
             if (inputManager.isKeyDown(KeyEvent.VK_UP) || inputManager.isKeyDown(KeyEvent.VK_W)) {
+                SoundManager.playOnce("sound/hover.wav");
                 previousMenuItem();
                 this.selectionCooldown.reset();
             }
             if (inputManager.isKeyDown(KeyEvent.VK_DOWN) || inputManager.isKeyDown(KeyEvent.VK_S)) {
+                SoundManager.playOnce("sound/hover.wav");
                 nextMenuItem();
                 this.selectionCooldown.reset();
             }
 
             // 2P mode: changed to switch case to accommodate input selection for users
             if (inputManager.isKeyDown(KeyEvent.VK_SPACE)) {
+                SoundManager.playOnce("sound/select.wav");
                 switch (this.menuIndex) {
                     case 0: // "1 Player"
                         this.coopSelected = false;
@@ -108,7 +117,9 @@ public class TitleScreen extends Screen {
 	 * Shifts the focus to the next menu item. - modified for 2P mode selection
 	 */
 	private void nextMenuItem() {
+
         this.menuIndex = (this.menuIndex + 1) % 4;
+
 	}
 
 	/**
@@ -122,6 +133,9 @@ public class TitleScreen extends Screen {
 	 */
 	private void draw() {
 		drawManager.initDrawing(this);
+
+        // Main menu space animation
+        drawManager.updateMenuSpace();
 
 		drawManager.drawTitle(this);
 		drawManager.drawMenu(this, this.menuIndex); // 2P mode: using menu index for highlighting
