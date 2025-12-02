@@ -46,6 +46,8 @@ public class GameScreen extends Screen {
     /** Height of the interface separation line. */
     private static final int SEPARATION_LINE_HEIGHT = 68;
     private static final int HIGH_SCORE_NOTICE_DURATION = 2000;
+    private static final int COOP_VICTORY_DISPLAY_DURATION = 4000;
+    private Integer coopWinnerPlayerId = null;
     private static boolean sessionHighScoreNotified = false;
 
     /** For Check Achievement
@@ -160,10 +162,12 @@ public class GameScreen extends Screen {
         this.highScoreNotified = false;
         this.highScoreNoticeStartTime = 0;
 
-        // 2P: bonus life adds to team pool + singleplayer mode
+        // 2P: bonus life adds to respective player + singleplayer mode
         if (this.bonusLife) {
-            if (state.isSharedLives()) {
-                state.addTeamLife(1); // two player
+            if (state.isCoop()) {
+                // In 2P mode, grant bonus life to both players
+                state.addLife(0, 1);
+                state.addLife(1, 1);
             } else {
                 // 1P legacy: grant to P1
                 state.addLife(0, 1);  // singleplayer
@@ -238,14 +242,13 @@ public class GameScreen extends Screen {
     public final int run() {
         super.run();
 
-        // 2P mode: award bonus score for remaining TEAM lives
-        // Split bonus equally between players in 2P mode, or give to P1 in 1P mode
+        // 2P mode: award bonus score for remaining lives per player
+        // Each player gets bonus based on their own remaining lives
         if (state.isCoop()) {
-            int bonusPerPlayer = (LIFE_SCORE * state.getLivesRemaining()) / 2;
-            state.addScore(0, bonusPerPlayer);
-            state.addScore(1, bonusPerPlayer);
+            state.addScore(0, LIFE_SCORE * state.getLivesRemaining(0));
+            state.addScore(1, LIFE_SCORE * state.getLivesRemaining(1));
         } else {
-            state.addScore(0, LIFE_SCORE * state.getLivesRemaining());
+            state.addScore(0, LIFE_SCORE * state.getLivesRemaining(0));
         }
 
         // Stop all music on exiting this screen
@@ -467,10 +470,11 @@ public class GameScreen extends Screen {
         // Per-player scores in 2P mode, aggregate in 1P mode
         if (state.isCoop()) {
             drawManager.drawScore(this, state.getScore(0), state.getScore(1), true);
+            drawManager.drawLives(this, state.getLivesRemaining(0), state.getLivesRemaining(1), true);
         } else {
             drawManager.drawScore(this, state.getScore(0), 0, false);
+            drawManager.drawLives(this, state.getLivesRemaining(0), 0, false);
         }
-        drawManager.drawLives(this, state.getLivesRemaining(),state.isCoop() );
         drawManager.drawCoins(this,  state.getCoins()); // ADD THIS LINE - 2P mode: team total
         // 2P mode: setting per-player coin count
 //        if (state.isCoop()) {
@@ -504,6 +508,14 @@ public class GameScreen extends Screen {
             drawManager.drawNewHighScoreNotice(this);
         }
 
+        if (state.isCoop() && this.coopWinnerPlayerId != null) {
+            String message = this.coopWinnerPlayerId > 0
+                    ? String.format("Player %d Wins!", this.coopWinnerPlayerId)
+                    : "Draw!";
+            drawManager.drawCenteredBigString(this, message, this.height / 2);
+            drawManager.drawCenteredRegularString(this, "Match Over", this.height / 2 + 40);
+        }
+
         // [ADD] draw achievement popups right before completing the frame
         drawManager.drawAchievementToasts(
                 this,
@@ -516,6 +528,17 @@ public class GameScreen extends Screen {
         }
 
         drawManager.completeDrawing(this);
+    }
+
+    private void concludeCoopMatch() {
+        BulletPool.recycle(this.bullets);
+        this.bullets.clear();
+        ItemPool.recycle(this.items);
+        this.items.clear();
+        this.levelFinished = true;
+        this.screenFinishedCooldown = Core.getCooldown(COOP_VICTORY_DISPLAY_DURATION);
+        this.screenFinishedCooldown.reset();
+        this.state.forceMatchOver();
     }
 
     /**
@@ -585,20 +608,31 @@ public class GameScreen extends Screen {
                         recyclable.add(bullet);
 
 
-                        drawManager.triggerExplosion(ship.getPositionX(), ship.getPositionY(), false, state.getLivesRemaining() == 1);
+                        drawManager.triggerExplosion(ship.getPositionX(), ship.getPositionY(), false, state.getLivesRemaining(p) == 1);
                         ship.addHit();
 
                         ship.destroy(); // explosion/respawn handled by Ship.update()
                         SoundManager.playOnce("sound/explosion.wav");
-                        state.decLife(p); // decrement shared/team lives by 1
+                        state.decLife(p); // decrement player's lives by 1
+
+                        if (state.isCoop() && state.getLivesRemaining(p) == 0 && this.coopWinnerPlayerId == null) {
+                            int otherIdx = (p == 0) ? 1 : 0;
+                            if (state.getLivesRemaining(otherIdx) > 0) {
+                                this.coopWinnerPlayerId = otherIdx + 1;
+                            } else {
+                                this.coopWinnerPlayerId = 0;
+                            }
+                            concludeCoopMatch();
+                        }
 
                         // Record damage for Survivor achievement check
                         this.tookDamageThisLevel = true;
 
+                        // Check if it's the last life total (for global display)
                         drawManager.setLastLife(state.getLivesRemaining() == 1);
                         drawManager.setDeath(state.getLivesRemaining() == 0);
 
-                        this.logger.info("Hit on player " + (p + 1) + ", team lives now: " + state.getLivesRemaining());
+                        this.logger.info("Hit on player " + (p + 1) + ", player lives: " + state.getLivesRemaining(p) + ", total lives: " + state.getLivesRemaining());
                         break;
                     }
                 }
