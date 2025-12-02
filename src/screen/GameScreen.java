@@ -11,6 +11,8 @@ import engine.GameSettings;
 import engine.GameState;
 import engine.*;
 import engine.SoundManager;
+import engine.DrawManager.SpriteType;
+
 import entity.Bullet;
 import entity.BulletPool;
 import entity.EnemyShip;
@@ -21,6 +23,10 @@ import entity.Ship;
 // NEW Item code
 import entity.Item;
 import entity.ItemPool;
+
+
+// NEW SideEnemyShip code
+import entity.SideEnemyShip;
 
 /**
  * Implements the game screen, where the action happens.(supports co-op with
@@ -47,8 +53,17 @@ public class GameScreen extends Screen {
     private static final int SEPARATION_LINE_HEIGHT = 68;
     private static final int HIGH_SCORE_NOTICE_DURATION = 2000;
     private static final int COOP_VICTORY_DISPLAY_DURATION = 4000;
+
+    /** Intervalle moyen entre apparitions des ennemis latéraux (ms). */
+    private static final int SIDE_ENEMY_INTERVAL = 2000;
+    /** Variance de l’intervalle entre apparitions (ms). */
+    private static final int SIDE_ENEMY_VARIANCE = 1000;
+    /** Vitesse horizontale des ennemis latéraux (px par frame). */
+    private static final int SIDE_ENEMY_SPEED = 4; //here to change side enemy speed
     private Integer coopWinnerPlayerId = null;
     private static boolean sessionHighScoreNotified = false;
+
+
 
     /** For Check Achievement
      * 2015-10-02 add new */
@@ -72,6 +87,14 @@ public class GameScreen extends Screen {
     private Set<Bullet> bullets;
     /** Set of all items spawned. */
     private Set<Item> items;
+    /** Ensemble d’ennemis latéraux (multijoueur, apparaissent sur les côtés). */
+    private Set<SideEnemyShip> sideEnemies;
+    /** Cooldown pour la génération de groupes d’ennemis latéraux. */
+    private Cooldown sideEnemySpawnCooldown;
+    /** Set of all side enemies. */
+
+
+
     private long gameStartTime;
     /** Checks if the level is finished. */
     private boolean levelFinished;
@@ -196,8 +219,14 @@ public class GameScreen extends Screen {
         // Start background music for gameplay
         SoundManager.startBackgroundMusic("sound/SpaceInvader-GameTheme.wav");
 
-        enemyShipFormation = new EnemyShipFormation(this.gameSettings);
-        enemyShipFormation.attach(this);
+        // Single-player: classic enemy formation.
+        // Multiplayer (co-op): no formation, only side enemies.
+        if (!state.isCoop()) {
+            enemyShipFormation = new EnemyShipFormation(this.gameSettings);
+            enemyShipFormation.attach(this);
+        } else {
+            enemyShipFormation = null;
+        }
 
         // 2P mode: create both ships, tagged to their respective teams
         this.ships[0] = new Ship(this.width / 2 - 60, this.height - 30, Entity.Team.PLAYER1, shipTypeP1, this.state); // P1
@@ -220,6 +249,11 @@ public class GameScreen extends Screen {
 
         // New Item Code
         this.items = new HashSet<Item>();
+
+        // Side enemies: mainly used in co-op, but initialized in all cases.
+        this.sideEnemies = new HashSet<SideEnemyShip>();
+        this.sideEnemySpawnCooldown = Core.getVariableCooldown(SIDE_ENEMY_INTERVAL, SIDE_ENEMY_VARIANCE);
+        this.sideEnemySpawnCooldown.reset();
 
         // Special input delay / countdown.
         this.gameStartTime = System.currentTimeMillis();
@@ -374,12 +408,27 @@ public class GameScreen extends Screen {
                     if (s != null)
                         s.update();
 
-                this.enemyShipFormation.update();
-                int bulletsBefore = this.bullets.size();
-                this.enemyShipFormation.shoot(this.bullets);
-                if (this.bullets.size() > bulletsBefore) {
-                    // At least one enemy bullet added
-                    SoundManager.playOnce("sound/shoot_enemies.wav");
+                // Single-player: update classic enemy formation.
+                if (!state.isCoop() && this.enemyShipFormation != null) {
+                    this.enemyShipFormation.update();
+                    int bulletsBefore = this.bullets.size();
+                    this.enemyShipFormation.shoot(this.bullets);
+                    if (this.bullets.size() > bulletsBefore) {
+                        // At least one enemy bullet added
+                        SoundManager.playOnce("sound/shoot_enemies.wav");
+                    }
+                }
+
+                // Co-op: only side enemies are spawned and updated.
+                if (state.isCoop()) {
+                    this.logger.info("[SideEnemy] Tick coop, sideEnemies actuels = " + this.sideEnemies.size());
+
+                    if (this.sideEnemySpawnCooldown.checkFinished()) {
+                        this.logger.info("[SideEnemy] Cooldown terminé, on va appeler spawnSideEnemyGroup().");
+                        spawnSideEnemyGroup();
+                        this.sideEnemySpawnCooldown.reset();
+                    }
+                    updateSideEnemies();
                 }
             }
 
@@ -402,8 +451,11 @@ public class GameScreen extends Screen {
                 this.highScoreNoticeStartTime = System.currentTimeMillis();
             }
 
-            // End condition: formation cleared or TEAM lives exhausted.
-            if ((this.enemyShipFormation.isEmpty() || !state.teamAlive()) && !this.levelFinished) {
+            // End condition:
+            //  - Single-player: formation cleared OR team out of lives.
+            //  - Co-op: only when team is out of lives (no level completion).
+            boolean noFormationEnemiesLeft = (!state.isCoop() && this.enemyShipFormation != null && this.enemyShipFormation.isEmpty());
+            if ((noFormationEnemiesLeft || !state.teamAlive()) && !this.levelFinished) {
                 // The object managed by the object pool pattern must be recycled at the end of the level.
                 BulletPool.recycle(this.bullets);
                 this.bullets.removeAll(this.bullets);
@@ -413,14 +465,17 @@ public class GameScreen extends Screen {
                 this.levelFinished = true;
                 this.screenFinishedCooldown.reset();
 
-                if(enemyShipFormation.getShipCount() == 0 && state.getBulletsShot() > 0 && state.getBulletsShot() == state.getShipsDestroyed()){
-                    achievementManager.unlock("Perfect Shooter");
-                }
-                if(enemyShipFormation.getShipCount() == 0 && !this.tookDamageThisLevel){
-                    achievementManager.unlock("Survivor");
-                }
-                if(enemyShipFormation.getShipCount() == 0 & state.getLevel() == 5){
-                    achievementManager.unlock("Clear");
+                // Level-related achievements: only in single-player.
+                if (!state.isCoop() && enemyShipFormation != null) {
+                    if(enemyShipFormation.getShipCount() == 0 && state.getBulletsShot() > 0 && state.getBulletsShot() == state.getShipsDestroyed()){
+                        achievementManager.unlock("Perfect Shooter");
+                    }
+                    if(enemyShipFormation.getShipCount() == 0 && !this.tookDamageThisLevel){
+                        achievementManager.unlock("Survivor");
+                    }
+                    if(enemyShipFormation.getShipCount() == 0 & state.getLevel() == 5){
+                        achievementManager.unlock("Clear");
+                    }
                 }
                 checkAchievement();
             }
@@ -456,7 +511,17 @@ public class GameScreen extends Screen {
                     this.enemyShipSpecial.getPositionX(),
                     this.enemyShipSpecial.getPositionY());
 
-        enemyShipFormation.draw();
+        // Single-player: draw main enemy formation.
+        if (!state.isCoop() && enemyShipFormation != null) {
+            enemyShipFormation.draw();
+        }
+
+        // Co-op: draw side enemies (multiplayer system).
+        if (state.isCoop()) {
+            for (SideEnemyShip enemy : this.sideEnemies) {
+                drawManager.drawEntity(enemy, enemy.getPositionX(), enemy.getPositionY());
+            }
+        }
 
         for (Bullet bullet : this.bullets)
             drawManager.drawEntity(bullet, bullet.getPositionX(),
@@ -490,16 +555,33 @@ public class GameScreen extends Screen {
 //            drawManager.drawCenteredRegularString(this, p2, 60);
 //            // remove the unnecessary "P1 S: K: B: C:" and "P2 S: K: B: C:" lines from the game screen
 //        }
-        drawManager.drawLevel(this, this.state.getLevel());
+        // Single-player only: draw current level.
+        if (!state.isCoop()) {
+            drawManager.drawLevel(this, this.state.getLevel());
+        }
         drawManager.drawHorizontalLine(this, SEPARATION_LINE_HEIGHT - 1);
         if (state.isCoop()) {
             drawManager.drawCoopDivider(this, this.coopDividerX, SEPARATION_LINE_HEIGHT, COOP_DIVIDER_WIDTH);
         }
-        drawManager.drawShipCount(this, enemyShipFormation.getShipCount());
+        // Single-player: number of enemies in the formation.
+        // Co-op: number of active side enemies.
+        if (!state.isCoop() && enemyShipFormation != null) {
+            drawManager.drawShipCount(this, enemyShipFormation.getShipCount());
+        } else if (state.isCoop()) {
+            drawManager.drawShipCount(this, (this.sideEnemies != null) ? this.sideEnemies.size() : 0);
+        }
 
+        // Start-of-round countdown (solo + multiplayer).
         if (!this.inputDelay.checkFinished()) {
             int countdown = (int) ((INPUT_DELAY - (System.currentTimeMillis() - this.gameStartTime)) / 1000);
-            drawManager.drawCountDown(this, this.state.getLevel(), countdown, this.bonusLife);
+
+            if (state.isCoop()) {
+                // In multiplayer mode show "Multiplayer" instead of "Level X".
+                drawManager.drawMultiplayerCountDown(this, countdown);
+            } else {
+                drawManager.drawCountDown(this, this.state.getLevel(), countdown, this.bonusLife);
+            }
+
             drawManager.drawHorizontalLine(this, this.height / 2 - this.height / 12);
             drawManager.drawHorizontalLine(this, this.height / 2 + this.height / 12);
         }
@@ -642,38 +724,78 @@ public class GameScreen extends Screen {
                 final int ownerId = bullet.getOwnerPlayerId(); // 1 or 2 (0 if unset)
                 final int pIdx = (ownerId == 2) ? 1 : 0; // default to P1 when unset
 
-                boolean finalShip = this.enemyShipFormation.lastShip();
+                // En solo uniquement : collisions avec la formation principale.
+                if (!state.isCoop() && this.enemyShipFormation != null) {
+                    boolean finalShip = this.enemyShipFormation.lastShip();
 
-                // Check collision with formation enemies
-                for (EnemyShip enemyShip : this.enemyShipFormation) {
-                    if (!enemyShip.isDestroyed() && checkCollision(bullet, enemyShip)) {
+                    // Check collision with formation enemies
+                    for (EnemyShip enemyShip : this.enemyShipFormation) {
+                        if (!enemyShip.isDestroyed() && checkCollision(bullet, enemyShip)) {
+                            recyclable.add(bullet);
+                            enemyShip.hit();
+
+                            if (enemyShip.isDestroyed()) {
+                                int points = enemyShip.getPointValue();
+                                state.addCoins(pIdx, enemyShip.getCoinValue()); // 2P mode: modified to per-player coins
+
+                                drawManager.triggerExplosion(enemyShip.getPositionX(), enemyShip.getPositionY(), true, finalShip);
+                                state.addScore(pIdx, points); // 2P mode: modified to add to P1 score for now
+                                state.incShipsDestroyed(pIdx);
+
+                                // obtain drop from ItemManager (may return null)
+                                Item drop = engine.ItemManager.getInstance().obtainDrop(enemyShip);
+                                if (drop != null) {
+                                    this.items.add(drop);
+                                    this.logger.info("Spawned " + drop.getType() + " at " + drop.getPositionX() + "," + drop.getPositionY());
+                                }
+
+                                this.enemyShipFormation.destroy(enemyShip);
+                                SoundManager.playOnce("sound/invaderkilled.wav");
+                                this.logger.info("Hit on enemy ship.");
+
+                                checkAchievement();
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // --- AJOUT : collisions avec ennemis latéraux ---
+                for (SideEnemyShip sideEnemy : this.sideEnemies) {
+                    if (!sideEnemy.isDestroyed() && checkCollision(bullet, sideEnemy)) {
                         recyclable.add(bullet);
-                        enemyShip.hit();
+                        sideEnemy.hit();
 
-                        if (enemyShip.isDestroyed()) {
-                            int points = enemyShip.getPointValue();
-                            state.addCoins(pIdx, enemyShip.getCoinValue()); // 2P mode: modified to per-player coins
+                        if (sideEnemy.isDestroyed()) {
+                            int points = sideEnemy.getPointValue();
+                            state.addCoins(pIdx, sideEnemy.getCoinValue());
+                            // On considère qu’ils ne sont jamais "dernier ennemi de la formation"
 
-                            drawManager.triggerExplosion(enemyShip.getPositionX(), enemyShip.getPositionY(), true, finalShip);
-                            state.addScore(pIdx, points); // 2P mode: modified to add to P1 score for now
+                            drawManager.triggerExplosion(sideEnemy.getPositionX(), sideEnemy.getPositionY(), true, false);
+                            state.addScore(pIdx, points);
                             state.incShipsDestroyed(pIdx);
 
-                            // obtain drop from ItemManager (may return null)
-                            Item drop = engine.ItemManager.getInstance().obtainDrop(enemyShip);
+                            Item drop = engine.ItemManager.getInstance().obtainDrop(sideEnemy);
                             if (drop != null) {
                                 this.items.add(drop);
                                 this.logger.info("Spawned " + drop.getType() + " at " + drop.getPositionX() + "," + drop.getPositionY());
                             }
 
-                            this.enemyShipFormation.destroy(enemyShip);
-                            SoundManager.playOnce("sound/invaderkilled.wav");
-                            this.logger.info("Hit on enemy ship.");
-
-                            checkAchievement();
+                            this.logger.info("Hit on side enemy ship.");
+                            // On le retire de la liste après la boucle
                         }
                         break;
                     }
                 }
+                // On nettoie les ennemis détruits
+                Set<SideEnemyShip> destroyedSide = new HashSet<>();
+                for (SideEnemyShip s : this.sideEnemies) {
+                    if (s.isDestroyed()) {
+                        destroyedSide.add(s);
+                    }
+                }
+                this.sideEnemies.removeAll(destroyedSide);
+                // --- FIN AJOUT ---
 
                 if (this.enemyShipSpecial != null
                         && !this.enemyShipSpecial.isDestroyed()
@@ -736,8 +858,8 @@ public class GameScreen extends Screen {
         if(state.getShipsDestroyed() == 1) {
             achievementManager.unlock("First Blood");
         }
-        // Clear
-        if (levelFinished && this.enemyShipFormation.isEmpty() && state.getLevel()==5) {
+        // Clear (fin de niveau) : uniquement valable en solo.
+        if (!state.isCoop() && levelFinished && this.enemyShipFormation != null && this.enemyShipFormation.isEmpty() && state.getLevel()==5) {
             achievementManager.unlock("Clear");
             float p1Acc = state.getBulletsShot(0) > 0 ? (float) state.getShipsDestroyed(0) / state.getBulletsShot(0)*100 : 0f;
             float p2Acc = state.getBulletsShot(1) > 0 ? (float) state.getShipsDestroyed(1) / state.getBulletsShot(1)*100 : 0f;
@@ -764,5 +886,108 @@ public class GameScreen extends Screen {
         if(state.getScore()>=3000){
             achievementManager.unlock("Get 3000 Score");
         }
+    }
+
+    /**
+     * Spawns a group of side enemies (1 to 3) on the left or right edge.
+     */
+    private void spawnSideEnemyGroup() {
+        // Spawn side: true = left to right, false = right to left.
+        boolean fromLeft = Math.random() < 0.5;
+
+        // Group size: 1 to 3.
+        int groupSize = 1 + (int) (Math.random() * 3);
+
+        this.logger.info("[SideEnemy] spawnSideEnemyGroup() called - fromLeft=" + fromLeft + ", groupSize=" + groupSize);
+
+        // Base Y is random between UI separation line and slightly above the bottom.
+        int minY = SEPARATION_LINE_HEIGHT + 20;
+        int maxY = this.height - 120; // move spawn area a bit higher so they don't appear too low
+        if (maxY <= minY) {
+            maxY = minY + 1; // safety
+        }
+        int baseY = minY + (int) (Math.random() * (maxY - minY));
+
+        for (int i = 0; i < groupSize; i++) {
+            // Small vertical offset so ships in the same group are close.
+            int offsetY = (int) (Math.random() * 61) - 30; // [-30, +30]
+            int y = baseY + offsetY;
+
+            // Try a few times to find a Y that does not overlap existing side enemies.
+            int attempts = 0;
+            while (attempts < 10 && isSideEnemyOverlapping(fromLeft ? -40 : this.width + 40, y)) {
+                offsetY = (int) (Math.random() * 61) - 30;
+                y = baseY + offsetY;
+                attempts++;
+            }
+            y = Math.max(minY, Math.min(maxY, y));
+
+            // Random enemy type (A/B/C).
+            SpriteType spriteType = randomEnemySpriteType();
+
+            // Place the ship just off-screen so it smoothly enters the playfield.
+            int startX = fromLeft ? -40 : this.width + 40;
+            int speedX = fromLeft ? SIDE_ENEMY_SPEED : -SIDE_ENEMY_SPEED;
+
+            SideEnemyShip ship = new SideEnemyShip(startX, y, speedX, spriteType);
+            this.sideEnemies.add(ship);
+            this.logger.info("[SideEnemy]   enemy created x=" + startX + ", y=" + y + ", speedX=" + speedX + ", type=" + spriteType);
+        }
+    }
+
+    /**
+     * Returns a random enemy ship sprite type among A, B, C.
+     */
+    private SpriteType randomEnemySpriteType() {
+        double r = Math.random();
+        if (r < 1.0 / 3.0) {
+            return engine.DrawManager.SpriteType.EnemyShipA1;
+        } else if (r < 2.0 / 3.0) {
+            return engine.DrawManager.SpriteType.EnemyShipB1;
+        } else {
+            return engine.DrawManager.SpriteType.EnemyShipC1;
+        }
+    }
+
+    /**
+     * Updates side enemies and removes those that fully left the screen.
+     */
+    private void updateSideEnemies() {
+        Set<SideEnemyShip> toRemove = new HashSet<>();
+
+        for (SideEnemyShip ship : this.sideEnemies) {
+            ship.updateHorizontal();
+
+            // If completely off-screen, mark for removal.
+            // Leave a 40px margin off-screen so they can enter the visible area first.
+            if (ship.getPositionX() + ship.getWidth() < -40 || ship.getPositionX() > this.width + 40) {
+                toRemove.add(ship);
+            }
+        }
+
+        this.sideEnemies.removeAll(toRemove);
+        if (!toRemove.isEmpty()) {
+            this.logger.info("[SideEnemy] " + toRemove.size() + " side enemy(ies) removed (off-screen).");
+        }
+    }
+
+    /**
+     * Checks if a side enemy placed at (x, y) would overlap an existing side enemy.
+     */
+    private boolean isSideEnemyOverlapping(int x, int y) {
+        for (SideEnemyShip existing : this.sideEnemies) {
+            int existingX = existing.getPositionX();
+            int existingY = existing.getPositionY();
+            int w = existing.getWidth();
+            int h = existing.getHeight();
+
+            boolean overlapX = Math.abs(x - existingX) < w;
+            boolean overlapY = Math.abs(y - existingY) < h;
+
+            if (overlapX && overlapY) {
+                return true;
+            }
+        }
+        return false;
     }
 }

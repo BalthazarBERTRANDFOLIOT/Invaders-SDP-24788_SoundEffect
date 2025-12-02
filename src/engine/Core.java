@@ -13,7 +13,6 @@ import screen.*;
 import entity.Ship;
 import screen.*;
 
-
 /**
  * Implements core game logic.
  *
