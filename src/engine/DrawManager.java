@@ -581,7 +581,7 @@ public final class DrawManager {
      */
 
 
-    public void drawLives(final Screen screen, final int lives, final boolean isCoop) {
+    public void drawLives(final Screen screen, final int livesP1, final int livesP2, final boolean isCoop) {
         backBufferGraphics.setFont(fontRegular);
         backBufferGraphics.setColor(Color.WHITE);
 
@@ -590,20 +590,40 @@ public final class DrawManager {
         };
 
         if (isCoop) {
-            backBufferGraphics.drawString(Integer.toString(lives), 20, 25);
-            for (int i = 0; i < lives; i++) {
-                if (i < 3) {
+            FontMetrics metrics = backBufferGraphics.getFontMetrics();
 
-                    drawEntity(heart, 40 + 35 * i, 9);
-                } else {
+            // P1 label and hearts (first line with inline hearts)
+            String p1Label = "P1:";
+            int p1LabelX = 20;
+            int labelY = 20;
+            backBufferGraphics.drawString(p1Label, p1LabelX, labelY);
+            int p1HeartStartX = p1LabelX + metrics.stringWidth(p1Label) + 10;
+            for (int i = 0; i < livesP1; i++) {
+                int heartX = p1HeartStartX + 35 * (i % 3);
+                int heartY = 8 + 25 * (i / 3);
+                drawEntity(heart, heartX, heartY);
+            }
 
-                    drawEntity(heart, 40 + 35 * (i - 3), 9 + 25);
-                }
+            // P2 label and hearts aligned to the right
+            String p2Label = "P2:";
+            int heartsInRow = Math.min(3, Math.max(1, livesP2));
+            int heartsWidth = heartsInRow * 35;
+            int p2HeartStartX = screen.getWidth() - 20 - heartsWidth;
+            int p2LabelX = p2HeartStartX - 10 - metrics.stringWidth(p2Label);
+            backBufferGraphics.drawString(p2Label, p2LabelX, labelY);
+
+            for (int i = 0; i < livesP2; i++) {
+                int column = i % 3;
+                int row = i / 3;
+                int heartX = p2HeartStartX + 35 * column;
+                int heartY = 8 + 25 * row;
+                drawEntity(heart, heartX, heartY);
             }
         }
         else {
-            backBufferGraphics.drawString(Integer.toString(lives), 20, 40);
-            for (int i = 0; i<lives; i++) {
+            // Single player mode: show only P1 lives
+            backBufferGraphics.drawString(Integer.toString(livesP1), 20, 40);
+            for (int i = 0; i < livesP1; i++) {
                 drawEntity(heart, 40 + 35 * i, 23);
             }
         }

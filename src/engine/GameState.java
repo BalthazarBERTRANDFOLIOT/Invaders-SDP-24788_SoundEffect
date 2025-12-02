@@ -32,6 +32,7 @@ public class GameState {
 	// team life pool and cap (used when sharedLives == true).
 	private int teamLives;
 	private int teamLivesCap;
+	private boolean matchForcedOver = false;
 
 	/** Current coin count. */ // ADD THIS LINE
     private static int coins = 0; // ADD THIS LINE - edited for 2P mode
@@ -52,16 +53,19 @@ public class GameState {
     private final Map<Integer, Map<ItemEffectType, EffectState>> playerEffects = new HashMap<>();
 
 	// 2P mode: co-op aware constructor used by the updated Core loop - livesEach
-	// applies per-player; co-op uses shared pool.
+	// applies per-player; co-op uses separate lives per player.
 	public GameState(final int level, final int livesEach, final boolean coop, final int coin) {
 		this.level = level;
 		this.coop = coop;
         this.coins = coin;
 
 		if (coop) {
-			this.sharedLives = true;
-			this.teamLives = Math.max(0, livesEach * NUM_PLAYERS);
-			this.teamLivesCap = this.teamLives;
+			// 2P mode: separate lives for each player
+			this.sharedLives = false;
+			this.teamLives = 0;
+			this.teamLivesCap = 0;
+			lives[0] = Math.max(0, livesEach);
+			lives[1] = Math.max(0, livesEach);
 		} else {
 			this.sharedLives = false;
 			this.teamLives = 0;
@@ -128,6 +132,14 @@ public class GameState {
 
 	public int getLivesRemaining() {
 		return sharedLives ? teamLives : (lives[0] + lives[1]);
+	}
+
+	// Get lives for a specific player
+	public int getLivesRemaining(final int p) {
+		if (p >= 0 && p < NUM_PLAYERS) {
+			return lives[p];
+		}
+		return 0;
 	}
 
 	public int getBulletsShot() {
@@ -247,7 +259,13 @@ public class GameState {
 
 	// Team alive if pool > 0 (shared) or any player has lives (separate).
 	public boolean teamAlive() {
+		if (matchForcedOver)
+			return false;
 		return sharedLives ? (teamLives > 0) : (lives[0] > 0 || lives[1] > 0);
+	}
+
+	public void forceMatchOver() {
+		this.matchForcedOver = true;
 	}
 
 	// for ItemEffect.java
