@@ -1212,6 +1212,34 @@ public final class DrawManager {
                     + fontBigMetrics.getHeight() / 3);
     }
 
+    /**
+     * Countdown to multiplayer game start.
+     * Same visual as drawCountDown but replaces "Level X" with "Multiplayer".
+     *
+     * @param screen  Screen to draw on.
+     * @param number  Countdown number.
+     */
+    public void drawMultiplayerCountDown(final Screen screen, final int number) {
+        int rectWidth = screen.getWidth();
+        int rectHeight = screen.getHeight() / 6;
+        backBufferGraphics.setColor(Color.BLACK);
+        backBufferGraphics.fillRect(0, screen.getHeight() / 2 - rectHeight / 2,
+                rectWidth, rectHeight);
+        backBufferGraphics.setColor(Color.GREEN);
+
+        if (number >= 4) {
+            drawCenteredBigString(screen, "Multiplayer",
+                    screen.getHeight() / 2
+                            + fontBigMetrics.getHeight() / 3);
+        } else if (number != 0) {
+            drawCenteredBigString(screen, Integer.toString(number),
+                    screen.getHeight() / 2 + fontBigMetrics.getHeight() / 3);
+        } else {
+            drawCenteredBigString(screen, "GO!", screen.getHeight() / 2
+                    + fontBigMetrics.getHeight() / 3);
+        }
+    }
+
     public void drawNewHighScoreNotice(final Screen screen) {
 //        String message = "NEW HIGH SCORE!";
 //        backBufferGraphics.setColor(Color.YELLOW);
