@@ -92,6 +92,9 @@ public class EnemyShipFormation implements Iterable<EnemyShip> {
     /** Number of not destroyed ships. */
     private int shipCount;
 
+    /** When enabled (2P mode), alternate rows move in opposite directions. */
+    private boolean alternatingRowsEnabled = false;
+
     /** Directions the formation can move. */
     private enum Direction {
         /** Movement to the right side of the screen. */
@@ -196,6 +199,20 @@ public class EnemyShipFormation implements Iterable<EnemyShip> {
      */
     public final void attach(final Screen newScreen) {
         screen = newScreen;
+
+        // Center the formation horizontally on the screen at spawn,
+        // instead of always starting from the left side.
+        int newPosX = (screen.getWidth() - this.width) / 2;
+        int deltaX = newPosX - this.positionX;
+
+        if (deltaX != 0) {
+            for (List<EnemyShip> column : this.enemyShips) {
+                for (EnemyShip enemyShip : column) {
+                    enemyShip.move(deltaX, 0);
+                }
+            }
+            this.positionX = newPosX;
+        }
     }
 
     /**
@@ -277,7 +294,10 @@ public class EnemyShipFormation implements Iterable<EnemyShip> {
             else
                 movementY = Y_SPEED;
 
-            positionX += movementX;
+            // Move the formation anchor (x only when not alternating).
+            if (!alternatingRowsEnabled) {
+                positionX += movementX;
+            }
             positionY += movementY;
 
             // Cleans explosions.
@@ -295,11 +315,41 @@ public class EnemyShipFormation implements Iterable<EnemyShip> {
                 column.removeAll(destroyed);
             }
 
-            for (List<EnemyShip> column : this.enemyShips)
-                for (EnemyShip enemyShip : column) {
-                    enemyShip.move(movementX, movementY);
-                    enemyShip.update();
+            // Apply movement to each ship.
+            if (!alternatingRowsEnabled || movementX == 0) {
+                // Original behavior: whole formation moves together.
+                for (List<EnemyShip> column : this.enemyShips)
+                    for (EnemyShip enemyShip : column) {
+                        enemyShip.move(movementX, movementY);
+                        enemyShip.update();
+                    }
+            } else {
+                // Alternating rows (2P mode): even rows go one way, odd rows the other,
+                // based on vertical row index derived from Y position.
+                int minX = SIDE_MARGIN;
+                int maxX = screen.getWidth() - SIDE_MARGIN - this.shipWidth;
+
+                for (List<EnemyShip> column : this.enemyShips) {
+                    for (EnemyShip enemyShip : column) {
+                        // Calcul de l’index de ligne à partir de la position Y réelle
+                        int rowIndex = (enemyShip.getPositionY() - this.positionY) / SEPARATION_DISTANCE;
+                        int dir = (rowIndex % 2 == 0) ? 1 : -1; // lignes 0,2,4,... dans un sens; 1,3,5,... dans l’autre
+
+                        // Mouvement alterné
+                        enemyShip.move(movementX * dir, movementY);
+
+                        // Clamp pour ne jamais sortir de la zone jouable
+                        int x = enemyShip.getPositionX();
+                        if (x < minX) {
+                            enemyShip.setPositionX(minX);
+                        } else if (x > maxX) {
+                            enemyShip.setPositionX(maxX);
+                        }
+
+                        enemyShip.update();
+                    }
                 }
+            }
         }
     }
 
@@ -488,6 +538,15 @@ public class EnemyShipFormation implements Iterable<EnemyShip> {
 
     public int getShipCount() {
         return this.shipCount;
+    }
+
+    /**
+     * Enable or disable alternating-row horizontal movement (used in 2P mode).
+     *
+     * @param enabled true to enable, false to disable.
+     */
+    public void setAlternatingRowsEnabled(final boolean enabled) {
+        this.alternatingRowsEnabled = enabled;
     }
 }
 
