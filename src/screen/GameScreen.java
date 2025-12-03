@@ -199,6 +199,11 @@ public class GameScreen extends Screen {
         enemyShipFormation = new EnemyShipFormation(this.gameSettings);
         enemyShipFormation.attach(this);
 
+        // In 2-player co-op, make alternate enemy rows move in opposite directions.
+        if (state.isCoop()) {
+            enemyShipFormation.setAlternatingRowsEnabled(true);
+        }
+
         // 2P mode: create both ships, tagged to their respective teams
         this.ships[0] = new Ship(this.width / 2 - 60, this.height - 30, Entity.Team.PLAYER1, shipTypeP1, this.state); // P1
         this.ships[0].setPlayerId(1);
